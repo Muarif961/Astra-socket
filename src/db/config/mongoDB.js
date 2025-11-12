@@ -1,6 +1,7 @@
+import { configDotenv } from "dotenv";
 import mongoose from "mongoose";
 
-const { configDotenv } = require("dotenv");
+
 
 configDotenv();
 

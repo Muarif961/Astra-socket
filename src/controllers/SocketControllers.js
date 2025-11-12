@@ -1,4 +1,4 @@
-import { Call } from "../models/Call";
+import { Call } from "../models/Call.js";
 
 export const registerSocketHandlers = (io) => {
 

@@ -1,10 +1,12 @@
 {
   "name": "astra-call-socket",
   "version": "1.0.0",
+  "type": "module",
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev":"nodemon index.js"
   },
   "keywords": [],
   "author": "",
@@ -15,6 +17,7 @@
     "express": "^5.1.0",
     "http": "^0.0.1-security",
     "mongoose": "^8.19.3",
+    "nodemon": "^3.1.11",
     "socket.io": "^4.8.1"
   }
 }

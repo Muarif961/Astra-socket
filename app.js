@@ -1,4 +1,4 @@
-import { connectDB } from "./src/db/config/mongoDB";
+import { connectDB } from "./src/db/config/mongoDB.js";
 import express from 'express';
 import cors from 'cors';
 
@@ -9,11 +9,11 @@ const app = express();
 app.use(express.json());
 
 
-const allowedOrigins = ['*'];
+const allowedOrigins = [''];
 
 app.use(cors({
     origin:allowedOrigins
 }));
 
-export {app};
+export {app}
 
