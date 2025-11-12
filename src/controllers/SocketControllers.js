@@ -124,108 +124,141 @@ import { User } from "../models/User.js";
 
 export const registerSocketHandlers = (io) => {
 
-  io.on("connection", (socket) => {
-    console.log("User connected:", socket.id);
+    io.on("connection", (socket) => {
+        console.log("User connected:", socket.id);
 
- 
-    socket.on("join", async ({ userId, userName }) => {
-      try {
-        
-        await User.findOneAndUpdate(
-          { userId },
-          { userName, status: "online", socketId: socket.id },
-          { upsert: true, new: true }
-        );
-        console.log(`User ${userName} (${userId}) is online.`);
-      } catch (error) {
-        console.error("Error registering user:", error);
-      }
-    });
 
-  
-    socket.on("start-call", async ({ callerId, participants }) => {
-      try {
-      
-        const onlineUsers = await User.find({ userId: { $in: participants }, status: "online" });
+        socket.on("join", async ({ userId, userName }) => {
+            try {
 
-        onlineUsers.forEach((user) => {
-          if (user.socketId) {
-            io.to(user.socketId).emit("incoming-call", {
-              callerId,
-              participants,
-            });
-          }
+                await User.findOneAndUpdate(
+                    { userId },
+                    { userName, status: "online", socketId: socket.id },
+                    { upsert: true, new: true }
+                );
+                console.log(`User ${userName} (${userId}) is online.`);
+            } catch (error) {
+                console.error("Error registering user:", error);
+            }
         });
-      } catch (error) {
-        console.error("Error notifying participants:", error);
-      }
+
+        const activeCalls = {};
+        socket.on("start-call", async ({ roomId, callerId, participants }) => {
+            console.log(callerId, 'hit');
+
+            try {
+
+                socket.join(roomId);
+                console.log(`Caller ${callerId} joined room ${roomId}`);
+                activeCalls[roomId] = new Set([callerId, ...participants]);
+                const newCall = new Call({
+                    roomId,
+                    callerId,
+                    calleeIds: participants,
+                    isGroup: participants.length > 1,
+                    status: "started",
+                });
+                await newCall.save();
+                console.log(`Call created in DB with roomId: ${roomId}`);
+                const onlineUsers = await User.find({ userId: { $in: participants }, status: "online" });
+
+                onlineUsers.forEach((user) => {
+                    if (user.socketId) {
+                        io.to(user.socketId).emit("incoming-call", {
+                            callerId,
+                            participants,
+                            roomId
+                        });
+                    }
+                });
+            } catch (error) {
+                console.error("Error notifying participants:", error);
+            }
+        });
+
+        socket.on("join-call", async ({ roomId, callerId, participants, userId }) => {
+            console.log(roomId, 'romId');
+
+            socket.join(roomId);
+            activeCalls[roomId].add(userId);
+            console.log(`User ${userId} joined room ${roomId}`);
+
+            socket.to(roomId).emit("user-joined-call", { userId });
+        });
+
+        const leaveCall = async (roomId, userId) => {
+            if (activeCalls[roomId]) {
+                activeCalls[roomId].delete(userId);
+
+                if (activeCalls[roomId].size <= 1) {
+                    await Call.updateOne(
+                        { roomId, status: "started" },
+                        { $set: { status: "ended", endTime: new Date() } }
+                    );
+                    io.to(roomId).emit("call-ended", { roomId });
+                    delete activeCalls[roomId];
+                }
+            }
+        };
+
+        socket.on("leave-call", ({ roomId, userId }) => leaveCall(roomId, userId));
+
+        socket.on("reject-call", async ({ callerId, userId }) => {
+            try {
+                const caller = await User.findOne({ userId: callerId, status: "online" });
+                if (caller && caller.socketId) {
+                    io.to(caller.socketId).emit("call-rejected", { userId });
+                }
+            } catch (error) {
+                console.error("Error handling reject-call:", error);
+            }
+        });
+
+
+
+
+        socket.on("offer", ({ to, offer }) => {
+            io.to(to).emit("offer", { from: socket.id, offer });
+        });
+
+        socket.on("answer", ({ to, answer }) => {
+            io.to(to).emit("answer", { from: socket.id, answer });
+        });
+
+        socket.on("ice-candidate", ({ to, candidate }) => {
+            io.to(to).emit("ice-candidate", { from: socket.id, candidate });
+        });
+
+
+        socket.on("end-call", async ({ roomId }) => {
+            try {
+                await Call.updateOne(
+                    { roomId, status: "started" },
+                    { $set: { status: "ended", endTime: new Date() } }
+                );
+                console.log(`Call ${roomId} ended`);
+            } catch (error) {
+                console.error("Error ending call:", error);
+            }
+
+            io.to(roomId).emit("call-ended", { roomId });
+        });
+
+
+        socket.on("disconnect", async () => {
+            console.log("User disconnected:", socket.id);
+
+            try {
+                const user = await User.findOneAndUpdate(
+                    { socketId: socket.id },
+                    { status: "offline", socketId: null }
+                );
+                if (user) {
+                    Object.keys(activeCalls).forEach(roomId => leaveCall(roomId, user.userId));
+                }
+            } catch (error) {
+                console.error("Error updating user status on disconnect:", error);
+            }
+        });
     });
-
-    socket.on("join-room", async ({ roomId, callerId, participants, userId }) => {
-      socket.join(roomId);
-      console.log(`User ${userId} joined room ${roomId}`);
-
-     
-      try {
-        const existingCall = await Call.findOne({ roomId });
-        if (!existingCall) {
-          const newCall = new Call({
-            callerId,
-            calleeIds: participants,
-            isGroup: participants.length > 1,
-            status: "started",
-          });
-          await newCall.save();
-          console.log(`Call saved in DB for room: ${roomId}`);
-        }
-      } catch (error) {
-        console.error("Error creating call:", error);
-      }
-
-     
-      socket.to(roomId).emit("user-joined-call", { userId });
-    });
-
-   
-    socket.on("offer", ({ to, offer }) => {
-      io.to(to).emit("offer", { from: socket.id, offer });
-    });
-
-    socket.on("answer", ({ to, answer }) => {
-      io.to(to).emit("answer", { from: socket.id, answer });
-    });
-
-    socket.on("ice-candidate", ({ to, candidate }) => {
-      io.to(to).emit("ice-candidate", { from: socket.id, candidate });
-    });
-
-    
-    socket.on("end-call", async ({ roomId }) => {
-      try {
-        await Call.updateOne(
-          { roomId, status: "started" },
-          { $set: { status: "ended", endTime: new Date() } }
-        );
-        console.log(`Call ${roomId} ended`);
-      } catch (error) {
-        console.error("Error ending call:", error);
-      }
-
-      io.to(roomId).emit("call-ended", { roomId });
-    });
-
-    
-    socket.on("disconnect", async () => {
-      console.log("User disconnected:", socket.id);
-
-      try {
-        await User.findOneAndUpdate(
-          { socketId: socket.id },
-          { status: "offline", socketId: null }
-        );
-      } catch (error) {
-        console.error("Error updating user status on disconnect:", error);
-      }
-    });
-  });
 };
