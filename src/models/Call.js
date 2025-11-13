@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 
 const CallSchema = new mongoose.Schema({
-    roomId: { type: String, required: true, unique: true },
+    roomId: { type: String, required: true, unique: false },
     callerId: { type: String, required: true },
     calleeIds: { type: [String], required: true },
     isGroup: { type: Boolean, default: false },

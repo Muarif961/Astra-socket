@@ -1,124 +1,3 @@
-// import { Call } from "../models/Call.js";
-
-// export const registerSocketHandlers = (io) => {
-
-//     const rooms = {};
-
-//     io.on("connection", (socket) => {
-//         console.log("User connected:", socket.id);
-
-//         /**
-//          * Join a room
-//          * @param {string} roomId
-//          * @param {string} userId - callerId or joining user
-//          */
-//         socket.on("join", (roomId, userId) => {
-//             socket.join(roomId);
-//             console.log(`User ${userId} (${socket.id}) joined room ${roomId}`);
-
-//             if (!rooms[roomId]) rooms[roomId] = [];
-
-
-//             rooms[roomId].push({ socketId: socket.id, userId });
-
-
-//             socket.to(roomId).emit("user-joined", { userId, socketId: socket.id });
-
-
-//             const existingUsers = rooms[roomId]
-//                 .filter((u) => u.socketId !== socket.id)
-//                 .map((u) => ({ userId: u.userId, socketId: u.socketId }));
-
-//             io.to(socket.id).emit("existing-users", existingUsers);
-//         });
-
-
-//         socket.on("offer", ({ roomId, offer, to }) => {
-//             io.to(to).emit("offer", { from: socket.id, offer });
-//         });
-
-
-//         socket.on("answer", ({ roomId, answer, to }) => {
-//             io.to(to).emit("answer", { from: socket.id, answer });
-//         });
-
-
-//         socket.on("ice-candidate", ({ roomId, candidate, to }) => {
-//             io.to(to).emit("ice-candidate", { from: socket.id, candidate });
-//         });
-
-
-//         socket.on("start-call", async ({ roomId, callerId, participants }) => {
-//             try {
-//                 const newCall = new Call({
-//                     roomId,
-//                     callerId,
-//                     calleeIds: participants,
-//                     isGroup: participants.length > 1,
-//                     status: "started",
-//                 });
-
-//                 await newCall.save();
-//                 console.log(`Call record saved to DB, room: ${roomId}`);
-//             } catch (error) {
-//                 console.error("Error saving call:", error);
-//             }
-//             participants.forEach(userId => {
-//                 const user = Object.values(rooms).flat().find(u => u.userId === userId);
-//                 if (user) {
-//                     io.to(user.socketId).emit("incoming-call", {
-//                         roomId,
-//                         callerId,
-//                         participants,
-//                     });
-//                 }
-//             });
-
-
-//             io.to(roomId).emit("call-started", {
-//                 roomId,
-//                 callerId,
-//                 participants,
-//             });
-//         });
-
-
-//         socket.on("end-call", async ({ roomId }) => {
-//             try {
-//                 const endTime = new Date();
-//                 await Call.updateOne(
-//                     { roomId, status: "started" },
-//                     { $set: { status: "ended", endTime } }
-//                 );
-//                 console.log(`Call ${roomId} marked as ended at ${endTime}`);
-//             } catch (error) {
-//                 console.log("Error updating call:", error);
-//             }
-
-//             io.to(roomId).emit("call-ended", { roomId });
-//         });
-
-
-//         socket.on("disconnect", () => {
-//             console.log("User disconnected:", socket.id);
-
-//             for (const [roomId, users] of Object.entries(rooms)) {
-//                 const index = users.findIndex((u) => u.socketId === socket.id);
-
-//                 if (index !== -1) {
-//                     const [leavingUser] = users.splice(index, 1);
-//                     socket.to(roomId).emit("user-left", {
-//                         socketId: socket.id,
-//                         userId: leavingUser.userId,
-//                     });
-
-//                     if (users.length === 0) delete rooms[roomId];
-//                     break;
-//                 }
-//             }
-//         });
-//     });
-// };
 import { Call } from "../models/Call.js";
 import { User } from "../models/User.js";
 
@@ -130,7 +9,7 @@ export const registerSocketHandlers = (io) => {
 
         socket.on("join", async ({ userId, userName }) => {
             try {
-
+                socket.userId = userId;
                 await User.findOneAndUpdate(
                     { userId },
                     { userName, status: "online", socketId: socket.id },
@@ -143,14 +22,15 @@ export const registerSocketHandlers = (io) => {
         });
 
         const activeCalls = {};
+        const normalizeRoomId = (roomId) => roomId.trim().replace(/[:!]/g, "_");
         socket.on("start-call", async ({ roomId, callerId, participants }) => {
             console.log(callerId, 'hit');
 
             try {
-
+                const key = normalizeRoomId(roomId);
                 socket.join(roomId);
                 console.log(`Caller ${callerId} joined room ${roomId}`);
-                activeCalls[roomId] = new Set([callerId, ...participants]);
+                activeCalls[key] = new Set([callerId, ...participants]);
                 const newCall = new Call({
                     roomId,
                     callerId,
@@ -178,25 +58,31 @@ export const registerSocketHandlers = (io) => {
 
         socket.on("join-call", async ({ roomId, callerId, participants, userId }) => {
             console.log(roomId, 'romId');
-
+            const key = normalizeRoomId(roomId);
             socket.join(roomId);
-            activeCalls[roomId].add(userId);
+            if (!activeCalls[key]) {
+                console.warn(`No active call found for ${roomId}, creating new entry`);
+                activeCalls[key] = new Set();
+            }
+
+            activeCalls[key].add(userId);
             console.log(`User ${userId} joined room ${roomId}`);
 
             socket.to(roomId).emit("user-joined-call", { userId });
         });
 
         const leaveCall = async (roomId, userId) => {
-            if (activeCalls[roomId]) {
-                activeCalls[roomId].delete(userId);
+            const key = normalizeRoomId(roomId);
+            if (activeCalls[key]) {
+                activeCalls[key].delete(userId);
 
-                if (activeCalls[roomId].size <= 1) {
+                if (activeCalls[key].size <= 1) {
                     await Call.updateOne(
                         { roomId, status: "started" },
                         { $set: { status: "ended", endTime: new Date() } }
                     );
                     io.to(roomId).emit("call-ended", { roomId });
-                    delete activeCalls[roomId];
+                    delete activeCalls[key];
                 }
             }
         };
@@ -217,17 +103,46 @@ export const registerSocketHandlers = (io) => {
 
 
 
-        socket.on("offer", ({ to, offer }) => {
-            io.to(to).emit("offer", { from: socket.id, offer });
+        socket.on("offer", async ({ toUserId, callerId, offer }) => {
+       
+            
+            try {
+                const callee = await User.findOne({ userId: toUserId, status: "online" });
+                if (!callee || !callee.socketId) {
+                    console.warn("Callee not online");
+                    return;
+                }
+               
+
+                io.to(callee.socketId).emit("offer", { from: callerId, offer });
+            } catch (error) {
+                console.error("Error forwarding offer:", error);
+            }
         });
 
-        socket.on("answer", ({ to, answer }) => {
-            io.to(to).emit("answer", { from: socket.id, answer });
+        socket.on("answer", async ({ toUserId, answer, calleeId }) => {
+            
+            try {
+                const caller = await User.findOne({ userId: toUserId, status: "online" });
+                if (!caller) return;
+                io.to(caller.socketId).emit("answer", { from: calleeId, answer });
+            } catch (err) {
+                console.error("Error forwarding answer:", err);
+            }
         });
 
-        socket.on("ice-candidate", ({ to, candidate }) => {
-            io.to(to).emit("ice-candidate", { from: socket.id, candidate });
+        socket.on("ice-candidate", async ({ toUserId, candidate }) => {
+            console.log('here');
+            
+            try {
+                const recipient = await User.findOne({ userId: toUserId, status: "online" });
+                if (!recipient || !recipient.socketId) return;
+                io.to(recipient.socketId).emit("ice-candidate", { from: socket.userId, candidate });
+            } catch (err) {
+                console.error("Error forwarding ICE candidate:", err);
+            }
         });
+
 
 
         socket.on("end-call", async ({ roomId }) => {
@@ -242,6 +157,7 @@ export const registerSocketHandlers = (io) => {
             }
 
             io.to(roomId).emit("call-ended", { roomId });
+            delete activeCalls[normalizeRoomId(roomId)];
         });
 
 
